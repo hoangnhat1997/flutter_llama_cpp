@@ -1,7 +1,11 @@
+import 'dart:ffi';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+// ignore: depend_on_referenced_packages
 import 'package:path_provider/path_provider.dart';
+// ignore: depend_on_referenced_packages
 import 'package:llama_cpp_dart/llama_cpp_dart.dart';
 
 void main() {
@@ -35,9 +39,17 @@ class _ChatScreenState extends State<ChatScreen> {
       if (Platform.isAndroid) {
         // On Android, if libllama.so is in jniLibs, it loads automatically.
         // But sometimes you need to explicitly open it depending on the binding version.
-        // Llama.libraryPath = "libllama.so"; 
+        try {
+          // 1. Try loading the dependency first
+          DynamicLibrary.open("libc++_shared.so");
+        } catch (e) {
+          if (kDebugMode) {
+            print("Warning: Could not load libc++_shared.so: $e");
+          }
+        }
+        Llama.libraryPath = "libllama.so";
       } else if (Platform.isIOS || Platform.isMacOS) {
-        Llama.libraryPath = "libllama.dylib"; 
+        Llama.libraryPath = "libllama.dylib";
       }
 
       // 2. Move model from Assets to Device Storage
@@ -46,8 +58,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final file = File(modelPath);
 
       if (!await file.exists()) {
-        setState(() => _response = "Copying model from assets (this takes time)...");
-        final byteData = await rootBundle.load('assets/models/your_model_name.gguf'); // REPLACE WITH YOUR MODEL NAME
+        setState(
+          () => _response = "Copying model from assets (this takes time)...",
+        );
+        final byteData = await rootBundle.load(
+          'assets/models/Qwen3-0.6B-Q4_K_M.gguf',
+        );
         await file.writeAsBytes(byteData.buffer.asUint8List());
       }
 
@@ -58,9 +74,9 @@ class _ChatScreenState extends State<ChatScreen> {
       contextParams.nCtx = 512; // Context window size (lower = less RAM)
 
       _llama = Llama(
-        modelPath, 
-        modelParams: modelParams, 
-        contextParams: contextParams
+        modelPath,
+        modelParams: modelParams,
+        contextParams: contextParams,
       );
 
       setState(() => _response = "Ready! Ask me something.");
@@ -79,15 +95,21 @@ class _ChatScreenState extends State<ChatScreen> {
       _controller.clear();
     });
 
-    // Run in an async generator
+    // Run in a loop, calling getNext() until done
     try {
       _llama!.setPrompt(prompt);
-      
-      // Stream the response
-      await for (String token in _llama!.getNext()) {
-        setState(() {
-          _response += token;
-        });
+
+      // Loop through tokens until generation is complete
+      bool isDone = false;
+      while (!isDone) {
+        final (token, done) = _llama!.getNext();
+        isDone = done;
+
+        if (token.isNotEmpty) {
+          setState(() {
+            _response += token;
+          });
+        }
       }
     } catch (e) {
       setState(() => _response += "\n[Error generating response]");
